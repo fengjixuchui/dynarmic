@@ -439,6 +439,14 @@ void EmitX64::EmitVectorAnd(EmitContext& ctx, IR::Inst* inst) {
 }
 
 static void ArithmeticShiftRightByte(EmitContext& ctx, BlockOfCode& code, const Xbyak::Xmm& result, u8 shift_amount) {
+    if (code.HasAVX512_Icelake()) {
+        // Do a logical shift right upon the 8x8 bit-matrix, but shift in
+        // `0x80` bytes into the matrix to repeat the most significant bit.
+        const u64 zero_extend = ~(0xFFFFFFFFFFFFFFFF << shift_amount) & 0x8080808080808080;
+        const u64 shift_matrix = (0x0102040810204080 >> (shift_amount * 8)) | zero_extend;
+        code.vgf2p8affineqb(result, result, code.MConst(xword_b, shift_matrix), 0);
+        return;
+    }
     const Xbyak::Xmm tmp = ctx.reg_alloc.ScratchXmm();
 
     code.punpckhbw(tmp, result);
@@ -1460,11 +1468,17 @@ void EmitX64::EmitVectorLogicalShiftLeft8(EmitContext& ctx, IR::Inst* inst) {
     if (shift_amount == 1) {
         code.paddb(result, result);
     } else if (shift_amount > 0) {
-        const u64 replicand = (0xFFULL << shift_amount) & 0xFF;
-        const u64 mask = Common::Replicate(replicand, Common::BitSize<u8>());
+        if (code.HasAVX512_Icelake()) {
+            // Galois 8x8 identity matrix, bit-shifted by the shift-amount
+            const u64 shift_matrix = 0x0102040810204080 >> (shift_amount * 8);
+            code.vgf2p8affineqb(result, result, code.MConst(xword_b, shift_matrix), 0);
+        } else {
+            const u64 replicand = (0xFFULL << shift_amount) & 0xFF;
+            const u64 mask = Common::Replicate(replicand, Common::BitSize<u8>());
 
-        code.psllw(result, shift_amount);
-        code.pand(result, code.MConst(xword, mask, mask));
+            code.psllw(result, shift_amount);
+            code.pand(result, code.MConst(xword, mask, mask));
+        }
     }
 
     ctx.reg_alloc.DefineValue(inst, result);
@@ -1510,11 +1524,17 @@ void EmitX64::EmitVectorLogicalShiftRight8(EmitContext& ctx, IR::Inst* inst) {
     const u8 shift_amount = args[1].GetImmediateU8();
 
     if (shift_amount > 0) {
-        const u64 replicand = 0xFEULL >> shift_amount;
-        const u64 mask = Common::Replicate(replicand, Common::BitSize<u8>());
+        if (code.HasAVX512_Icelake()) {
+            // Galois 8x8 identity matrix, bit-shifted by the shift-amount
+            const u64 shift_matrix = 0x0102040810204080 << (shift_amount * 8);
+            code.vgf2p8affineqb(result, result, code.MConst(xword_b, shift_matrix), 0);
+        } else {
+            const u64 replicand = 0xFEULL >> shift_amount;
+            const u64 mask = Common::Replicate(replicand, Common::BitSize<u8>());
 
-        code.psrlw(result, shift_amount);
-        code.pand(result, code.MConst(xword, mask, mask));
+            code.psrlw(result, shift_amount);
+            code.pand(result, code.MConst(xword, mask, mask));
+        }
     }
 
     ctx.reg_alloc.DefineValue(inst, result);
