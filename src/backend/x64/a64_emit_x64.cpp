@@ -659,11 +659,13 @@ void A64EmitX64::EmitA64DataMemoryBarrier(A64EmitContext&, IR::Inst*) {
     code.lfence();
 }
 
-void A64EmitX64::EmitA64InstructionSynchronizationBarrier(A64EmitContext& ctx, IR::Inst* ) {
-    ctx.reg_alloc.HostCall(nullptr);
+void A64EmitX64::EmitA64InstructionSynchronizationBarrier(A64EmitContext& ctx, IR::Inst*) {
+    if (!conf.hook_isb) {
+        return;
+    }
 
-    code.mov(code.ABI_PARAM1, reinterpret_cast<u64>(jit_interface));
-    code.CallLambda([](A64::Jit* jit) { jit->ClearCache(); });
+    ctx.reg_alloc.HostCall(nullptr);
+    Devirtualize<&A64::UserCallbacks::InstructionSynchronizationBarrierRaised>(conf.callbacks).EmitCall(code);
 }
 
 void A64EmitX64::EmitA64GetCNTFRQ(A64EmitContext& ctx, IR::Inst* inst) {
@@ -815,7 +817,11 @@ Xbyak::RegExp EmitVAddrLookup(BlockOfCode& code, A64EmitContext& ctx, size_t bit
         code.jnz(abort, code.T_NEAR);
     }
     code.mov(page, qword[r14 + tmp * sizeof(void*)]);
-    code.test(page, page);
+    if (ctx.conf.page_table_pointer_mask_bits == 0) {
+        code.test(page, page);
+    } else {
+        code.and_(page, ~u32(0) << ctx.conf.page_table_pointer_mask_bits);
+    }
     code.jz(abort, code.T_NEAR);
     if (ctx.conf.absolute_offset_page_table) {
         return page + vaddr;

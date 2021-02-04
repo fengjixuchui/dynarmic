@@ -90,6 +90,8 @@ struct UserCallbacks {
 
     virtual void ExceptionRaised(VAddr pc, Exception exception) = 0;
 
+    virtual void InstructionSynchronizationBarrierRaised() {}
+
     // Timing-related callbacks
     // ticks ticks have passed
     virtual void AddTicks(std::uint64_t ticks) = 0;
@@ -137,6 +139,11 @@ struct UserConfig {
     ///       So there might be wrongly faulted pages which maps to nullptr.
     ///       This can be avoided by carefully allocating the memory region.
     bool absolute_offset_page_table = false;
+    /// Masks out the first N bits in host pointers from the page table.
+    /// The intention behind this is to allow users of Dynarmic to pack attributes in the
+    /// same integer and update the pointer attribute pair atomically.
+    /// If the configured value is 3, all pointers will be forcefully aligned to 8 bytes.
+    int page_table_pointer_mask_bits = 0;
     /// Determines if we should detect memory accesses via page_table that straddle are
     /// misaligned. Accesses that straddle page boundaries will fallback to the relevant
     /// memory callback.
@@ -158,6 +165,11 @@ struct UserConfig {
 
     // Coprocessors
     std::array<std::shared_ptr<Coprocessor>, 16> coprocessors{};
+
+    /// When set to true, UserCallbacks::InstructionSynchronizationBarrierRaised will be
+    /// called when an ISB instruction is executed.
+    /// When set to false, ISB will be treated as a NOP instruction.
+    bool hook_isb = false;
 
     /// Hint instructions would cause ExceptionRaised to be called with the appropriate
     /// argument.

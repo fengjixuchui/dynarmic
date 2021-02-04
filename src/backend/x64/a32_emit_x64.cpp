@@ -720,10 +720,12 @@ void A32EmitX64::EmitA32DataMemoryBarrier(A32EmitContext&, IR::Inst*) {
 }
 
 void A32EmitX64::EmitA32InstructionSynchronizationBarrier(A32EmitContext& ctx, IR::Inst*) {
-    ctx.reg_alloc.HostCall(nullptr);
+    if (!conf.hook_isb) {
+       return;
+    }
 
-    code.mov(code.ABI_PARAM1, reinterpret_cast<u64>(jit_interface));
-    code.CallLambda([](A32::Jit* jit) { jit->ClearCache(); });
+    ctx.reg_alloc.HostCall(nullptr);
+    Devirtualize<&A32::UserCallbacks::InstructionSynchronizationBarrierRaised>(conf.callbacks).EmitCall(code);
 }
 
 void A32EmitX64::EmitA32BXWritePC(A32EmitContext& ctx, IR::Inst* inst) {
@@ -935,7 +937,11 @@ Xbyak::RegExp EmitVAddrLookup(BlockOfCode& code, A32EmitContext& ctx, size_t bit
     code.mov(tmp, vaddr.cvt32());
     code.shr(tmp, static_cast<int>(page_bits));
     code.mov(page, qword[r14 + tmp.cvt64() * sizeof(void*)]);
-    code.test(page, page);
+    if (ctx.conf.page_table_pointer_mask_bits == 0) {
+        code.test(page, page);
+    } else {
+        code.and_(page, ~u32(0) << ctx.conf.page_table_pointer_mask_bits);
+    }
     code.jz(abort, code.T_NEAR);
     if (ctx.conf.absolute_offset_page_table) {
         return page + vaddr;
