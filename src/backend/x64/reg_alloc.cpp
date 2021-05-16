@@ -12,13 +12,14 @@
 
 #include "backend/x64/abi.h"
 #include "backend/x64/reg_alloc.h"
+#include "backend/x64/stack_layout.h"
 #include "common/assert.h"
 
 namespace Dynarmic::Backend::X64 {
 
 #define MAYBE_AVX(OPCODE, ...)                                          \
     [&] {                                                               \
-        if (code.HasAVX()) {                                            \
+        if (code.HasHostFeature(HostFeature::AVX)) {                    \
             code.v##OPCODE(__VA_ARGS__);                                \
         } else {                                                        \
             code.OPCODE(__VA_ARGS__);                                   \
@@ -223,12 +224,11 @@ bool Argument::IsInMemory() const {
     return HostLocIsSpill(*reg_alloc.ValueLocation(value.GetInst()));
 }
 
-RegAlloc::RegAlloc(BlockOfCode& code, size_t num_spills, std::function<Xbyak::Address(HostLoc)> spill_to_addr, std::vector<HostLoc> gpr_order, std::vector<HostLoc> xmm_order)
+RegAlloc::RegAlloc(BlockOfCode& code, std::vector<HostLoc> gpr_order, std::vector<HostLoc> xmm_order)
     : gpr_order(gpr_order)
     , xmm_order(xmm_order)
-    , hostloc_info(NonSpillHostLocCount + num_spills)
+    , hostloc_info(NonSpillHostLocCount + SpillCount)
     , code(code)
-    , spill_to_addr(std::move(spill_to_addr))
 {}
 
 RegAlloc::ArgumentInfo RegAlloc::GetArgumentInfo(IR::Inst* inst) {
@@ -438,6 +438,20 @@ void RegAlloc::HostCall(IR::Inst* result_def, std::optional<Argument::copyable_r
     }
 }
 
+void RegAlloc::AllocStackSpace(size_t stack_space) {
+    ASSERT(stack_space < static_cast<size_t>(std::numeric_limits<s32>::max()));
+    ASSERT(reserved_stack_space == 0);
+    reserved_stack_space = stack_space;
+    code.sub(code.rsp, static_cast<u32>(stack_space));
+}
+
+void RegAlloc::ReleaseStackSpace(size_t stack_space) {
+    ASSERT(stack_space < static_cast<size_t>(std::numeric_limits<s32>::max()));
+    ASSERT(reserved_stack_space == stack_space);
+    reserved_stack_space = 0;
+    code.add(code.rsp, static_cast<u32>(stack_space));
+}
+
 void RegAlloc::EndOfAllocScope() {
     for (auto& iter : hostloc_info) {
         iter.ReleaseAll();
@@ -629,7 +643,7 @@ void RegAlloc::EmitMove(size_t bit_width, HostLoc to, HostLoc from) {
             MAYBE_AVX(movd, HostLocToReg64(to).cvt32(), HostLocToXmm(from));
         }
     } else if (HostLocIsXMM(to) && HostLocIsSpill(from)) {
-        const Xbyak::Address spill_addr = spill_to_addr(from);
+        const Xbyak::Address spill_addr = SpillToOpArg(from);
         ASSERT(spill_addr.getBit() >= bit_width);
         switch (bit_width) {
         case 128:
@@ -647,7 +661,7 @@ void RegAlloc::EmitMove(size_t bit_width, HostLoc to, HostLoc from) {
             UNREACHABLE();
         }
     } else if (HostLocIsSpill(to) && HostLocIsXMM(from)) {
-        const Xbyak::Address spill_addr = spill_to_addr(to);
+        const Xbyak::Address spill_addr = SpillToOpArg(to);
         ASSERT(spill_addr.getBit() >= bit_width);
         switch (bit_width) {
         case 128:
@@ -667,16 +681,16 @@ void RegAlloc::EmitMove(size_t bit_width, HostLoc to, HostLoc from) {
     } else if (HostLocIsGPR(to) && HostLocIsSpill(from)) {
         ASSERT(bit_width != 128);
         if (bit_width == 64) {
-            code.mov(HostLocToReg64(to), spill_to_addr(from));
+            code.mov(HostLocToReg64(to), SpillToOpArg(from));
         } else {
-            code.mov(HostLocToReg64(to).cvt32(), spill_to_addr(from));
+            code.mov(HostLocToReg64(to).cvt32(), SpillToOpArg(from));
         }
     } else if (HostLocIsSpill(to) && HostLocIsGPR(from)) {
         ASSERT(bit_width != 128);
         if (bit_width == 64) {
-            code.mov(spill_to_addr(to), HostLocToReg64(from));
+            code.mov(SpillToOpArg(to), HostLocToReg64(from));
         } else {
-            code.mov(spill_to_addr(to), HostLocToReg64(from).cvt32());
+            code.mov(SpillToOpArg(to), HostLocToReg64(from).cvt32());
         }
     } else {
         ASSERT_FALSE("Invalid RegAlloc::EmitMove");
@@ -691,6 +705,16 @@ void RegAlloc::EmitExchange(HostLoc a, HostLoc b) {
     } else {
         ASSERT_FALSE("Invalid RegAlloc::EmitExchange");
     }
+}
+
+Xbyak::Address RegAlloc::SpillToOpArg(HostLoc loc) {
+    ASSERT(HostLocIsSpill(loc));
+
+    size_t i = static_cast<size_t>(loc) - static_cast<size_t>(HostLoc::FirstSpill);
+    ASSERT_MSG(i < SpillCount, "Spill index greater than number of available spill locations");
+
+    using namespace Xbyak::util;
+    return xword[rsp + reserved_stack_space + ABI_SHADOW_SPACE + offsetof(StackLayout, spill) + i * sizeof(u64) * 2];
 }
 
 } // namespace Dynarmic::Backend::X64

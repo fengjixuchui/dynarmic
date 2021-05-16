@@ -5,7 +5,9 @@
 
 #include <xbyak.h>
 
+#include "backend/x64/abi.h"
 #include "backend/x64/hostloc.h"
+#include "backend/x64/stack_layout.h"
 
 namespace Dynarmic::Backend::X64 {
 

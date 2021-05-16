@@ -89,6 +89,28 @@ TEST_CASE("A64: REV16", "[a64]") {
     REQUIRE(jit.GetPC() == 8);
 }
 
+TEST_CASE("A64: XTN", "[a64]") {
+    A64TestEnv env;
+    A64::Jit jit{A64::UserConfig{&env}};
+
+    env.code_mem.emplace_back(0x0e212803); // XTN v3.8b, v0.8h
+    env.code_mem.emplace_back(0x0e612824); // XTN v4.4h, v1.4s
+    env.code_mem.emplace_back(0x0ea12845); // XTN v5.2s, v2.2d
+    env.code_mem.emplace_back(0x14000000); // B .
+
+    jit.SetPC(0);
+    jit.SetVector(0, {0x3333222211110000, 0x7777666655554444});
+    jit.SetVector(1, {0x1111111100000000, 0x3333333322222222});
+    jit.SetVector(2, {0x0000000000000000, 0x1111111111111111});
+
+    env.ticks_left = 4;
+    jit.Run();
+
+    REQUIRE(jit.GetVector(3) == Vector{0x7766554433221100, 0x0000000000000000});
+    REQUIRE(jit.GetVector(4) == Vector{0x3333222211110000, 0x0000000000000000});
+    REQUIRE(jit.GetVector(5) == Vector{0x1111111100000000, 0x0000000000000000});
+}
+
 TEST_CASE("A64: AND", "[a64]") {
     A64TestEnv env;
     A64::Jit jit{A64::UserConfig{&env}};
@@ -633,4 +655,32 @@ TEST_CASE("A64: Optimization failure when folding ADD", "[a64]") {
     REQUIRE(jit.GetRegister(30) == 0xa977c850d16d562c);
     REQUIRE(jit.GetPstate() == 0x20000000);
     REQUIRE(jit.GetVector(30) == Vector{0xf7f6f5f4, 0});
+}
+
+TEST_CASE("A64: Cache Maintenance Instructions", "[a64]") {
+    class CacheMaintenanceTestEnv final : public A64TestEnv {
+        void InstructionCacheOperationRaised(A64::InstructionCacheOperation op, VAddr value) override {
+            REQUIRE(op == A64::InstructionCacheOperation::InvalidateByVAToPoU);
+            REQUIRE(value == 0xcafed00d);
+        }
+        void DataCacheOperationRaised(A64::DataCacheOperation op, VAddr value) override {
+            REQUIRE(op == A64::DataCacheOperation::InvalidateByVAToPoC);
+            REQUIRE(value == 0xcafebabe);
+        }
+    };
+
+    CacheMaintenanceTestEnv env;
+    A64::UserConfig conf{&env};
+    conf.hook_data_cache_operations = true;
+    A64::Jit jit{conf};
+
+    jit.SetRegister(0, 0xcafed00d);
+    jit.SetRegister(1, 0xcafebabe);
+
+    env.code_mem.emplace_back(0xd50b7520); // ic ivau, x0
+    env.code_mem.emplace_back(0xd5087621); // dc ivac, x1
+    env.code_mem.emplace_back(0x14000000); // B .
+
+    env.ticks_left = 3;
+    jit.Run();
 }

@@ -1,5 +1,6 @@
 add_library(dynarmic
     ../include/dynarmic/A32/a32.h
+    ../include/dynarmic/A32/arch_version.h
     ../include/dynarmic/A32/config.h
     ../include/dynarmic/A32/coprocessor.h
     ../include/dynarmic/A32/coprocessor_util.h
@@ -79,29 +80,29 @@ add_library(dynarmic
     frontend/decoder/matcher.h
     frontend/imm.cpp
     frontend/imm.h
-    frontend/ir/basic_block.cpp
-    frontend/ir/basic_block.h
-    frontend/ir/cond.h
-    frontend/ir/ir_emitter.cpp
-    frontend/ir/ir_emitter.h
-    frontend/ir/location_descriptor.cpp
-    frontend/ir/location_descriptor.h
-    frontend/ir/microinstruction.cpp
-    frontend/ir/microinstruction.h
-    frontend/ir/opcodes.cpp
-    frontend/ir/opcodes.h
-    frontend/ir/opcodes.inc
-    frontend/ir/terminal.h
-    frontend/ir/type.cpp
-    frontend/ir/type.h
-    frontend/ir/value.cpp
-    frontend/ir/value.h
-    ir_opt/constant_propagation_pass.cpp
-    ir_opt/dead_code_elimination_pass.cpp
-    ir_opt/identity_removal_pass.cpp
-    ir_opt/ir_matcher.h
-    ir_opt/passes.h
-    ir_opt/verification_pass.cpp
+    ir/basic_block.cpp
+    ir/basic_block.h
+    ir/cond.h
+    ir/ir_emitter.cpp
+    ir/ir_emitter.h
+    ir/location_descriptor.cpp
+    ir/location_descriptor.h
+    ir/microinstruction.cpp
+    ir/microinstruction.h
+    ir/opcodes.cpp
+    ir/opcodes.h
+    ir/opcodes.inc
+    ir/opt/constant_propagation_pass.cpp
+    ir/opt/dead_code_elimination_pass.cpp
+    ir/opt/identity_removal_pass.cpp
+    ir/opt/ir_matcher.h
+    ir/opt/passes.h
+    ir/opt/verification_pass.cpp
+    ir/terminal.h
+    ir/type.cpp
+    ir/type.h
+    ir/value.cpp
+    ir/value.h
 )
 
 if ("A32" IN_LIST DYNARMIC_FRONTENDS)
@@ -111,7 +112,9 @@ if ("A32" IN_LIST DYNARMIC_FRONTENDS)
         frontend/A32/decoder/asimd.h
         frontend/A32/decoder/asimd.inc
         frontend/A32/decoder/thumb16.h
+        frontend/A32/decoder/thumb16.inc
         frontend/A32/decoder/thumb32.h
+        frontend/A32/decoder/thumb32.inc
         frontend/A32/decoder/vfp.h
         frontend/A32/decoder/vfp.inc
         frontend/A32/disassembler/disassembler.h
@@ -124,6 +127,8 @@ if ("A32" IN_LIST DYNARMIC_FRONTENDS)
         frontend/A32/location_descriptor.cpp
         frontend/A32/location_descriptor.h
         frontend/A32/PSR.h
+        frontend/A32/translate/conditional_state.cpp
+        frontend/A32/translate/conditional_state.h
         frontend/A32/translate/impl/asimd_load_store_structures.cpp
         frontend/A32/translate/impl/asimd_misc.cpp
         frontend/A32/translate/impl/asimd_one_reg_modified_immediate.cpp
@@ -150,18 +155,32 @@ if ("A32" IN_LIST DYNARMIC_FRONTENDS)
         frontend/A32/translate/impl/status_register_access.cpp
         frontend/A32/translate/impl/synchronization.cpp
         frontend/A32/translate/impl/thumb16.cpp
-        frontend/A32/translate/impl/thumb32.cpp
+        frontend/A32/translate/impl/thumb32_branch.cpp
+        frontend/A32/translate/impl/thumb32_control.cpp
+        frontend/A32/translate/impl/thumb32_coprocessor.cpp
+        frontend/A32/translate/impl/thumb32_data_processing_modified_immediate.cpp
+        frontend/A32/translate/impl/thumb32_data_processing_plain_binary_immediate.cpp
+        frontend/A32/translate/impl/thumb32_data_processing_register.cpp
+        frontend/A32/translate/impl/thumb32_data_processing_shifted_register.cpp
+        frontend/A32/translate/impl/thumb32_load_byte.cpp
+        frontend/A32/translate/impl/thumb32_load_halfword.cpp
+        frontend/A32/translate/impl/thumb32_load_store_dual.cpp
+        frontend/A32/translate/impl/thumb32_load_store_multiple.cpp
+        frontend/A32/translate/impl/thumb32_load_word.cpp
+        frontend/A32/translate/impl/thumb32_long_multiply.cpp
         frontend/A32/translate/impl/thumb32_misc.cpp
+        frontend/A32/translate/impl/thumb32_multiply.cpp
         frontend/A32/translate/impl/thumb32_parallel.cpp
-        frontend/A32/translate/impl/translate_arm.h
-        frontend/A32/translate/impl/translate_thumb.h
+        frontend/A32/translate/impl/thumb32_store_single_data_item.cpp
+        frontend/A32/translate/impl/translate.cpp
+        frontend/A32/translate/impl/translate.h
         frontend/A32/translate/impl/vfp.cpp
         frontend/A32/translate/translate.cpp
         frontend/A32/translate/translate.h
         frontend/A32/translate/translate_arm.cpp
         frontend/A32/translate/translate_thumb.cpp
-        ir_opt/a32_constant_memory_reads_pass.cpp
-        ir_opt/a32_get_set_elimination_pass.cpp
+        ir/opt/a32_constant_memory_reads_pass.cpp
+        ir/opt/a32_get_set_elimination_pass.cpp
     )
 endif()
 
@@ -228,18 +247,19 @@ if ("A64" IN_LIST DYNARMIC_FRONTENDS)
         frontend/A64/translate/impl/simd_two_register_misc.cpp
         frontend/A64/translate/impl/simd_vector_x_indexed_element.cpp
         frontend/A64/translate/impl/sys_dc.cpp
+        frontend/A64/translate/impl/sys_ic.cpp
         frontend/A64/translate/impl/system.cpp
         frontend/A64/translate/impl/system_flag_format.cpp
         frontend/A64/translate/impl/system_flag_manipulation.cpp
         frontend/A64/translate/translate.cpp
         frontend/A64/translate/translate.h
-        ir_opt/a64_callback_config_pass.cpp
-        ir_opt/a64_get_set_elimination_pass.cpp
-        ir_opt/a64_merge_interpret_blocks.cpp
+        ir/opt/a64_callback_config_pass.cpp
+        ir/opt/a64_get_set_elimination_pass.cpp
+        ir/opt/a64_merge_interpret_blocks.cpp
     )
 endif()
 
-if (ARCHITECTURE_x86_64)
+if (ARCHITECTURE STREQUAL "x86_64")
     target_sources(dynarmic PRIVATE
         backend/x64/abi.cpp
         backend/x64/abi.h
@@ -268,12 +288,14 @@ if (ARCHITECTURE_x86_64)
         backend/x64/exclusive_monitor.cpp
         backend/x64/hostloc.cpp
         backend/x64/hostloc.h
+        backend/x64/host_feature.h
         backend/x64/jitstate_info.h
         backend/x64/oparg.h
         backend/x64/perf_map.cpp
         backend/x64/perf_map.h
         backend/x64/reg_alloc.cpp
         backend/x64/reg_alloc.h
+        backend/x64/stack_layout.h
     )
 
     if ("A32" IN_LIST DYNARMIC_FRONTENDS)

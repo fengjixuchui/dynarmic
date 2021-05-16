@@ -13,8 +13,10 @@
 #include <xbyak.h>
 #include <xbyak_util.h>
 
+#include "backend/x64/abi.h"
 #include "backend/x64/callback.h"
 #include "backend/x64/constant_pool.h"
+#include "backend/x64/host_feature.h"
 #include "backend/x64/jitstate_info.h"
 #include "common/cast_util.h"
 #include "common/common_types.h"
@@ -31,7 +33,7 @@ struct RunCodeCallbacks {
 
 class BlockOfCode final : public Xbyak::CodeGenerator {
 public:
-    BlockOfCode(RunCodeCallbacks cb, JitStateInfo jsi, std::function<void(BlockOfCode&)> rcp);
+    BlockOfCode(RunCodeCallbacks cb, JitStateInfo jsi, size_t total_code_size, size_t far_code_offset, std::function<void(BlockOfCode&)> rcp);
     BlockOfCode(const BlockOfCode&) = delete;
 
     /// Call when external emitters have finished emitting their preludes.
@@ -129,7 +131,7 @@ public:
     static const Xbyak::Reg64 ABI_PARAM2;
     static const Xbyak::Reg64 ABI_PARAM3;
     static const Xbyak::Reg64 ABI_PARAM4;
-    static const std::array<Xbyak::Reg64, 4> ABI_PARAMS;
+    static const std::array<Xbyak::Reg64, ABI_PARAM_COUNT> ABI_PARAMS;
 #else
     static const Xbyak::Reg64 ABI_RETURN;
     static const Xbyak::Reg64 ABI_RETURN2;
@@ -139,35 +141,23 @@ public:
     static const Xbyak::Reg64 ABI_PARAM4;
     static const Xbyak::Reg64 ABI_PARAM5;
     static const Xbyak::Reg64 ABI_PARAM6;
-    static const std::array<Xbyak::Reg64, 6> ABI_PARAMS;
+    static const std::array<Xbyak::Reg64, ABI_PARAM_COUNT> ABI_PARAMS;
 #endif
 
     JitStateInfo GetJitStateInfo() const { return jsi; }
 
-    bool HasSSSE3() const;
-    bool HasSSE41() const;
-    bool HasSSE42() const;
-    bool HasPCLMULQDQ() const;
-    bool HasAVX() const;
-    bool HasF16C() const;
-    bool HasAESNI() const;
-    bool HasLZCNT() const;
-    bool HasBMI1() const;
-    bool HasBMI2() const;
-    bool HasFastBMI2() const;
-    bool HasFMA() const;
-    bool HasAVX2() const;
-    bool HasAVX512_Skylake() const;
-    bool HasAVX512_Icelake() const;
-    bool HasAVX512_BITALG() const;
+    bool HasHostFeature(HostFeature feature) const {
+        return (host_features & feature) == feature;
+    }
 
 private:
     RunCodeCallbacks cb;
     JitStateInfo jsi;
+    size_t far_code_offset;
 
     bool prelude_complete = false;
-    CodePtr near_code_begin;
-    CodePtr far_code_begin;
+    CodePtr near_code_begin = nullptr;
+    CodePtr far_code_begin = nullptr;
 
     ConstantPool constant_pool;
 
@@ -183,8 +173,7 @@ private:
     std::array<const void*, 4> return_from_run_code;
     void GenRunCode(std::function<void(BlockOfCode&)> rcp);
 
-    Xbyak::util::Cpu cpu_info;
-    bool DoesCpuSupport(Xbyak::util::Cpu::Type type) const;
+    const HostFeature host_features;
 };
 
 } // namespace Dynarmic::Backend::X64

@@ -12,8 +12,8 @@
 #include "common/common_types.h"
 #include "frontend/A64/location_descriptor.h"
 #include "frontend/A64/types.h"
-#include "frontend/ir/ir_emitter.h"
-#include "frontend/ir/value.h"
+#include "ir/ir_emitter.h"
+#include "ir/value.h"
 
 namespace Dynarmic::A64 {
 
@@ -42,6 +42,7 @@ public:
     void CallSupervisor(u32 imm);
     void ExceptionRaised(Exception exception);
     void DataCacheOperationRaised(DataCacheOperation op, const IR::U64& value);
+    void InstructionCacheOperationRaised(InstructionCacheOperation op, const IR::U64& value);
     void DataSynchronizationBarrier();
     void DataMemoryBarrier();
     void InstructionSynchronizationBarrier();

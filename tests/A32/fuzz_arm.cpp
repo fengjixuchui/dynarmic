@@ -16,15 +16,16 @@
 #include "common/common_types.h"
 #include "common/fp/fpcr.h"
 #include "common/fp/fpsr.h"
+#include "common/llvm_disassemble.h"
 #include "common/scope_exit.h"
-#include "frontend/A32/disassembler/disassembler.h"
+#include "frontend/A32/ITState.h"
 #include "frontend/A32/location_descriptor.h"
 #include "frontend/A32/translate/translate.h"
 #include "frontend/A32/types.h"
-#include "frontend/ir/basic_block.h"
-#include "frontend/ir/location_descriptor.h"
-#include "frontend/ir/opcodes.h"
 #include "fuzz_util.h"
+#include "ir/basic_block.h"
+#include "ir/location_descriptor.h"
+#include "ir/opcodes.h"
 #include "rand_int.h"
 #include "testenv.h"
 #include "unicorn_emu/a32_unicorn.h"
@@ -36,8 +37,8 @@
 namespace {
 using namespace Dynarmic;
 
-bool ShouldTestInst(u32 instruction, u32 pc, bool is_thumb, bool is_last_inst) {
-    const A32::LocationDescriptor location = A32::LocationDescriptor{pc, {}, {}}.SetTFlag(is_thumb);
+bool ShouldTestInst(u32 instruction, u32 pc, bool is_thumb, bool is_last_inst, A32::ITState it_state = {}) {
+    const A32::LocationDescriptor location = A32::LocationDescriptor{pc, {}, {}}.SetTFlag(is_thumb).SetIT(it_state);
     IR::Block block{location};
     const bool should_continue = A32::TranslateSingleInstruction(block, location, instruction);
 
@@ -145,7 +146,7 @@ u32 GenRandomArmInst(u32 pc, bool is_last_inst) {
     }
 }
 
-std::vector<u16> GenRandomThumbInst(u32 pc, bool is_last_inst) {
+std::vector<u16> GenRandomThumbInst(u32 pc, bool is_last_inst, A32::ITState it_state = {}) {
     static const struct InstructionGeneratorInfo {
         std::vector<InstructionGenerator> generators;
         std::vector<InstructionGenerator> invalid;
@@ -157,13 +158,51 @@ std::vector<u16> GenRandomThumbInst(u32 pc, bool is_last_inst) {
 #undef INST
         };
 
+        const std::vector<std::tuple<std::string, const char*>> vfp_list {
+#define INST(fn, name, bitstring) {#fn, bitstring},
+#include "frontend/A32/decoder/vfp.inc"
+#undef INST
+        };
+
+        const std::vector<std::tuple<std::string, const char*>> asimd_list {
+#define INST(fn, name, bitstring) {#fn, bitstring},
+#include "frontend/A32/decoder/asimd.inc"
+#undef INST
+        };
+
         std::vector<InstructionGenerator> generators;
         std::vector<InstructionGenerator> invalid;
 
         // List of instructions not to test
         static constexpr std::array do_not_test {
-            "thumb16_SETEND",
             "thumb16_BKPT",
+            "thumb16_IT",
+            "thumb16_SETEND",
+
+            // Exclusive load/stores
+            "thumb32_LDREX",
+            "thumb32_LDREXB",
+            "thumb32_LDREXD",
+            "thumb32_LDREXH",
+            "thumb32_STREX",
+            "thumb32_STREXB",
+            "thumb32_STREXD",
+            "thumb32_STREXH",
+
+            // FPSCR is inaccurate
+            "vfp_VMRS",
+
+            // Unicorn is incorrect?
+            "thumb32_MRS_reg",
+
+            // Unicorn has incorrect implementation (incorrect rounding and unsets CPSR.T??)
+            "vfp_VCVT_to_fixed",
+            "vfp_VCVT_from_fixed",
+            "asimd_VRECPS", // Unicorn does not fuse the multiply and subtraction, resulting in being off by 1ULP.
+            "asimd_VRSQRTS", // Unicorn does not fuse the multiply and subtraction, resulting in being off by 1ULP.
+
+            // Coprocessor
+            "thumb32_CDP", "thumb32_LDC", "thumb32_MCR", "thumb32_MCRR", "thumb32_MRC", "thumb32_MRRC", "thumb32_STC",
         };
 
         for (const auto& [fn, bitstring] : list) {
@@ -173,6 +212,34 @@ std::vector<u16> GenRandomThumbInst(u32 pc, bool is_last_inst) {
             }
             generators.emplace_back(InstructionGenerator{bitstring});
         }
+        for (const auto& [fn, bs] : vfp_list) {
+            std::string bitstring = bs;
+            if (bitstring.substr(0, 4) == "cccc" || bitstring.substr(0, 4) == "----") {
+                bitstring.replace(0, 4, "1110");
+            }
+            if (std::find(do_not_test.begin(), do_not_test.end(), fn) != do_not_test.end()) {
+                invalid.emplace_back(InstructionGenerator{bitstring.c_str()});
+                continue;
+            }
+            generators.emplace_back(InstructionGenerator{bitstring.c_str()});
+        }
+        for (const auto& [fn, bs] : asimd_list) {
+            std::string bitstring = bs;
+            if (bitstring.substr(0, 7) == "1111001") {
+                const char U = bitstring[7];
+                bitstring.replace(0, 8, "111-1111");
+                bitstring[3] = U;
+            } else if (bitstring.substr(0, 8) == "11110100") {
+                bitstring.replace(0, 8, "11111001");
+            } else {
+                ASSERT_FALSE("Unhandled ASIMD instruction: {} {}", fn, bs);
+            }
+            if (std::find(do_not_test.begin(), do_not_test.end(), fn) != do_not_test.end()) {
+                invalid.emplace_back(InstructionGenerator{bitstring.c_str()});
+                continue;
+            }
+            generators.emplace_back(InstructionGenerator{bitstring.c_str()});
+        }
         return InstructionGeneratorInfo{generators, invalid};
     }();
 
@@ -181,7 +248,7 @@ std::vector<u16> GenRandomThumbInst(u32 pc, bool is_last_inst) {
         const u32 inst = instructions.generators[index].Generate();
         const bool is_four_bytes = (inst >> 16) != 0;
 
-        if (ShouldTestInst(is_four_bytes ? Common::SwapHalves32(inst) : inst, pc, true, is_last_inst)) {
+        if (ShouldTestInst(is_four_bytes ? Common::SwapHalves32(inst) : inst, pc, true, is_last_inst, it_state)) {
             if (is_four_bytes)
                 return { static_cast<u16>(inst >> 16), static_cast<u16>(inst) };
             return { static_cast<u16>(inst) };
@@ -247,10 +314,7 @@ static void RunTestInstance(Dynarmic::A32::Jit& jit,
 
     SCOPE_FAIL {
         fmt::print("Instruction Listing:\n");
-        for (u32 instruction : instructions) {
-            fmt::print("{:08x} {}\n", instruction, A32::DisassembleArm(instruction));
-        }
-        fmt::print("\n");
+        fmt::print("{}\n", Common::DisassembleAArch32(std::is_same_v<TestEnv, ThumbTestEnv>, initial_pc, (const u8*)instructions.data(), instructions.size() * sizeof(instructions[0])));
 
         fmt::print("Initial register listing:\n");
         for (size_t i = 0; i < regs.size(); ++i) {
@@ -481,5 +545,57 @@ TEST_CASE("A32: Small random thumb block", "[thumb]") {
 
         regs[15] = start_address;
         RunTestInstance(jit, uni, jit_env, uni_env, regs, ext_reg, instructions, cpsr, fpcr, 5);
+    }
+}
+
+TEST_CASE("A32: Test thumb IT instruction", "[thumb]") {
+    ThumbTestEnv jit_env{};
+    ThumbTestEnv uni_env{};
+
+    Dynarmic::A32::Jit jit{GetUserConfig(jit_env)};
+    A32Unicorn<ThumbTestEnv> uni{uni_env};
+
+    A32Unicorn<ThumbTestEnv>::RegisterArray regs;
+    A32Unicorn<ThumbTestEnv>::ExtRegArray ext_reg;
+    std::vector<u16> instructions;
+
+    for (size_t iteration = 0; iteration < 100000; ++iteration) {
+        std::generate(regs.begin(), regs.end(), [] { return RandInt<u32>(0, ~u32(0)); });
+        std::generate(ext_reg.begin(), ext_reg.end(), [] { return RandInt<u32>(0, ~u32(0)); });
+
+        const size_t pre_instructions = RandInt<size_t>(0, 3);
+        const size_t post_instructions = RandInt<size_t>(5, 8);
+
+        instructions.clear();
+
+        for (size_t i = 0; i < pre_instructions; i++) {
+            const std::vector<u16> inst = GenRandomThumbInst(instructions.size() * 2, false);
+            instructions.insert(instructions.end(), inst.begin(), inst.end());
+        }
+
+        // Emit IT instruction
+        A32::ITState it_state = [&]{
+            while (true) {
+                const u16 imm8 = RandInt<u16>(0, 0xFF);
+                if (Common::Bits<0, 3>(imm8) == 0b0000 || Common::Bits<4, 7>(imm8) == 0b1111 || (Common::Bits<4, 7>(imm8) == 0b1110 && Common::BitCount(Common::Bits<0, 3>(imm8)) != 1)) {
+                    continue;
+                }
+                instructions.push_back(0b1011111100000000 | imm8);
+                return A32::ITState{static_cast<u8>(imm8)};
+            }
+        }();
+
+        for (size_t i = 0; i < post_instructions; i++) {
+            const std::vector<u16> inst = GenRandomThumbInst(instructions.size() * 2, i == post_instructions - 1, it_state);
+            instructions.insert(instructions.end(), inst.begin(), inst.end());
+            it_state = it_state.Advance();
+        }
+
+        const u32 start_address = 100;
+        const u32 cpsr = (RandInt<u32>(0, 0xF) << 28) | 0x1F0;
+        const u32 fpcr = RandomFpcr();
+
+        regs[15] = start_address;
+        RunTestInstance(jit, uni, jit_env, uni_env, regs, ext_reg, instructions, cpsr, fpcr, pre_instructions + 1 + post_instructions);
     }
 }

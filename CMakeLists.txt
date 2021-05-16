@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(dynarmic C CXX)
+project(dynarmic C CXX ASM)
 
 # Determine if we're built as a subproject (using add_subdirectory)
 # or if this is the master project.
@@ -97,17 +97,16 @@ else()
         list(APPEND DYNARMIC_CXX_FLAGS
              -Wfatal-errors)
     endif()
+
+    if (CMAKE_CXX_COMPILER_ID MATCHES "[Cc]lang")
+        # Bracket depth determines maximum size of a fold expression in Clang since 9c9974c3ccb6.
+        # And this in turns limits the size of a std::array.
+        list(APPEND DYNARMIC_CXX_FLAGS -fbracket-depth=1024)
+    endif()
 endif()
 
 # Arch detection
 include(DetectArchitecture)
-if (MSVC)
-    detect_architecture("_M_AMD64" x86_64)
-    detect_architecture("_M_ARM64" Aarch64)
-else()
-    detect_architecture("__x86_64__" x86_64)
-    detect_architecture("__aarch64__" Aarch64)
-endif()
 if (NOT DEFINED ARCHITECTURE)
     message(FATAL_ERROR "Unsupported architecture encountered. Ending CMake generation.")
 endif()

@@ -12,7 +12,7 @@
 #include "frontend/A32/FPSCR.h"
 #include "frontend/A32/PSR.h"
 #include "frontend/A32/ITState.h"
-#include "frontend/ir/location_descriptor.h"
+#include "ir/location_descriptor.h"
 
 namespace Dynarmic::A32 {
 
@@ -88,11 +88,15 @@ public:
         return LocationDescriptor(arm_pc, cpsr, A32::FPSCR{new_fpscr & FPSCR_MODE_MASK}, single_stepping);
     }
 
-    LocationDescriptor AdvanceIT() const {
+    LocationDescriptor SetIT(ITState new_it) const {
         PSR new_cpsr = cpsr;
-        new_cpsr.IT(new_cpsr.IT().Advance());
+        new_cpsr.IT(new_it);
 
         return LocationDescriptor(arm_pc, new_cpsr, fpscr, single_stepping);
+    }
+
+    LocationDescriptor AdvanceIT() const {
+        return SetIT(IT().Advance());
     }
 
     LocationDescriptor SetSingleStepping(bool new_single_stepping) const {

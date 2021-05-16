@@ -19,16 +19,17 @@
 #include "backend/x64/emit_x64.h"
 #include "backend/x64/nzcv_util.h"
 #include "backend/x64/perf_map.h"
+#include "backend/x64/stack_layout.h"
 #include "common/assert.h"
 #include "common/bit_util.h"
 #include "common/common_types.h"
 #include "common/scope_exit.h"
 #include "frontend/A64/location_descriptor.h"
 #include "frontend/A64/types.h"
-#include "frontend/ir/basic_block.h"
-#include "frontend/ir/cond.h"
-#include "frontend/ir/microinstruction.h"
-#include "frontend/ir/opcodes.h"
+#include "ir/basic_block.h"
+#include "ir/cond.h"
+#include "ir/microinstruction.h"
+#include "ir/opcodes.h"
 
 // TODO: Have ARM flags in host flags and not have them use up GPR registers unless necessary.
 // TODO: Actually implement that proper instruction selector you've always wanted to sweetheart.
@@ -75,12 +76,15 @@ A64EmitX64::BlockDescriptor A64EmitX64::Emit(IR::Block& block) {
         return gprs;
     }();
 
-    RegAlloc reg_alloc{code, A64JitState::SpillCount, SpillToOpArg<A64JitState>, gpr_order, any_xmm};
+    RegAlloc reg_alloc{code, gpr_order, any_xmm};
     A64EmitContext ctx{conf, reg_alloc, block};
 
     // Start emitting.
     code.align();
     const u8* const entrypoint = code.getCurr();
+    code.SwitchToFarCode();
+    const u8* const entrypoint_far = code.getCurr();
+    code.SwitchToNearCode();
 
     ASSERT(block.GetCondition() == IR::Cond::AL);
 
@@ -99,7 +103,7 @@ A64EmitX64::BlockDescriptor A64EmitX64::Emit(IR::Block& block) {
         case IR::Opcode::A64##name:                \
             A64EmitX64::EmitA64##name(ctx, inst);  \
             break;
-#include "frontend/ir/opcodes.inc"
+#include "ir/opcodes.inc"
 #undef OPCODE
 #undef A32OPC
 #undef A64OPC
@@ -126,7 +130,7 @@ A64EmitX64::BlockDescriptor A64EmitX64::Emit(IR::Block& block) {
     const auto range = boost::icl::discrete_interval<u64>::closed(descriptor.PC(), end_location.PC() - 1);
     block_ranges.AddRange(range, descriptor);
 
-    return RegisterBlock(descriptor, entrypoint, size);
+    return RegisterBlock(descriptor, entrypoint, entrypoint_far, size);
 }
 
 void A64EmitX64::ClearCache() {
@@ -160,7 +164,7 @@ void A64EmitX64::GenMemory128Accessors() {
 #else
     code.sub(rsp, 8);
     Devirtualize<&A64::UserCallbacks::MemoryRead128>(conf.callbacks).EmitCall(code);
-    if (code.HasSSE41()) {
+    if (code.HasHostFeature(HostFeature::SSE41)) {
         code.movq(xmm1, code.ABI_RETURN);
         code.pinsrq(xmm1, code.ABI_RETURN2, 1);
     } else {
@@ -183,7 +187,7 @@ void A64EmitX64::GenMemory128Accessors() {
     code.add(rsp, 8 + 16 + ABI_SHADOW_SPACE);
 #else
     code.sub(rsp, 8);
-    if (code.HasSSE41()) {
+    if (code.HasHostFeature(HostFeature::SSE41)) {
         code.movq(code.ABI_PARAM3, xmm1);
         code.pextrq(code.ABI_PARAM4, xmm1, 1);
     } else {
@@ -334,7 +338,7 @@ void A64EmitX64::GenTerminalHandlers() {
         calculate_location_descriptor();
         code.L(rsb_cache_miss);
         code.mov(r12, reinterpret_cast<u64>(fast_dispatch_table.data()));
-        if (code.HasSSE42()) {
+        if (code.HasHostFeature(HostFeature::SSE42)) {
             code.crc32(rbx, r12d);
         }
         code.and_(ebp, fast_dispatch_table_mask);
@@ -352,12 +356,13 @@ void A64EmitX64::GenTerminalHandlers() {
         code.align();
         fast_dispatch_table_lookup = code.getCurr<FastDispatchEntry&(*)(u64)>();
         code.mov(code.ABI_PARAM2, reinterpret_cast<u64>(fast_dispatch_table.data()));
-        if (code.HasSSE42()) {
+        if (code.HasHostFeature(HostFeature::SSE42)) {
             code.crc32(code.ABI_PARAM1, code.ABI_PARAM2);
         }
         code.and_(code.ABI_PARAM1.cvt32(), fast_dispatch_table_mask);
         code.lea(code.ABI_RETURN, code.ptr[code.ABI_PARAM1 + code.ABI_PARAM2]);
         code.ret();
+        PerfMapRegister(fast_dispatch_table_lookup, code.getCurr(), "a64_fast_dispatch_table_lookup");
     }
 }
 
@@ -372,7 +377,7 @@ void A64EmitX64::EmitPushRSB(EmitContext& ctx, IR::Inst* inst) {
 void A64EmitX64::EmitA64SetCheckBit(A64EmitContext& ctx, IR::Inst* inst) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
     const Xbyak::Reg8 to_store = ctx.reg_alloc.UseGpr(args[0]).cvt8();
-    code.mov(code.byte[r15 + offsetof(A64JitState, check_bit)], to_store);
+    code.mov(code.byte[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, check_bit)], to_store);
 }
 
 void A64EmitX64::EmitA64GetCFlag(A64EmitContext& ctx, IR::Inst* inst) {
@@ -388,7 +393,7 @@ void A64EmitX64::EmitA64GetNZCVRaw(A64EmitContext& ctx, IR::Inst* inst) {
 
     code.mov(nzcv_raw, dword[r15 + offsetof(A64JitState, cpsr_nzcv)]);
 
-    if (code.HasFastBMI2()) {
+    if (code.HasHostFeature(HostFeature::FastBMI2)) {
         const Xbyak::Reg32 tmp = ctx.reg_alloc.ScratchGpr().cvt32();
         code.mov(tmp, NZCV::x64_mask);
         code.pext(nzcv_raw, nzcv_raw, tmp);
@@ -407,7 +412,7 @@ void A64EmitX64::EmitA64SetNZCVRaw(A64EmitContext& ctx, IR::Inst* inst) {
     const Xbyak::Reg32 nzcv_raw = ctx.reg_alloc.UseScratchGpr(args[0]).cvt32();
 
     code.shr(nzcv_raw, 28);
-    if (code.HasFastBMI2()) {
+    if (code.HasHostFeature(HostFeature::FastBMI2)) {
         const Xbyak::Reg32 tmp = ctx.reg_alloc.ScratchGpr().cvt32();
         code.mov(tmp, NZCV::x64_mask);
         code.pdep(nzcv_raw, nzcv_raw, tmp);
@@ -647,8 +652,14 @@ void A64EmitX64::EmitA64ExceptionRaised(A64EmitContext& ctx, IR::Inst* inst) {
 
 void A64EmitX64::EmitA64DataCacheOperationRaised(A64EmitContext& ctx, IR::Inst* inst) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ctx.reg_alloc.HostCall(nullptr, args[0], args[1]);
+    ctx.reg_alloc.HostCall(nullptr, {}, args[0], args[1]);
     Devirtualize<&A64::UserCallbacks::DataCacheOperationRaised>(conf.callbacks).EmitCall(code);
+}
+
+void A64EmitX64::EmitA64InstructionCacheOperationRaised(A64EmitContext& ctx, IR::Inst* inst) {
+    auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+    ctx.reg_alloc.HostCall(nullptr, {}, args[0], args[1]);
+    Devirtualize<&A64::UserCallbacks::InstructionCacheOperationRaised>(conf.callbacks).EmitCall(code);
 }
 
 void A64EmitX64::EmitA64DataSynchronizationBarrier(A64EmitContext&, IR::Inst*) {
@@ -793,7 +804,7 @@ Xbyak::RegExp EmitVAddrLookup(BlockOfCode& code, A64EmitContext& ctx, size_t bit
         code.shr(tmp, int(page_bits));
     } else if (ctx.conf.silently_mirror_page_table) {
         if (valid_page_index_bits >= 32) {
-            if (code.HasBMI2()) {
+            if (code.HasHostFeature(HostFeature::BMI2)) {
                 const Xbyak::Reg64 bit_count = ctx.reg_alloc.ScratchGpr();
                 code.mov(bit_count, unused_top_bits);
                 code.bzhi(tmp, vaddr, bit_count);
@@ -1090,7 +1101,7 @@ void A64EmitX64::EmitExclusiveReadMemory(A64EmitContext& ctx, IR::Inst* inst) {
 
         code.mov(code.byte[r15 + offsetof(A64JitState, exclusive_state)], u8(1));
         code.mov(code.ABI_PARAM1, reinterpret_cast<u64>(&conf));
-        code.sub(rsp, 16 + ABI_SHADOW_SPACE);
+        ctx.reg_alloc.AllocStackSpace(16 + ABI_SHADOW_SPACE);
         code.lea(code.ABI_PARAM3, ptr[rsp + ABI_SHADOW_SPACE]);
         code.CallLambda(
             [](A64::UserConfig& conf, u64 vaddr, A64::Vector& ret) {
@@ -1100,7 +1111,7 @@ void A64EmitX64::EmitExclusiveReadMemory(A64EmitContext& ctx, IR::Inst* inst) {
             }
         );
         code.movups(result, xword[rsp + ABI_SHADOW_SPACE]);
-        code.add(rsp, 16 + ABI_SHADOW_SPACE);
+        ctx.reg_alloc.ReleaseStackSpace(16 + ABI_SHADOW_SPACE);
 
         ctx.reg_alloc.DefineValue(inst, result);
     }
@@ -1159,7 +1170,7 @@ void A64EmitX64::EmitExclusiveWriteMemory(A64EmitContext& ctx, IR::Inst* inst) {
             }
         );
     } else {
-        code.sub(rsp, 16 + ABI_SHADOW_SPACE);
+        ctx.reg_alloc.AllocStackSpace(16 + ABI_SHADOW_SPACE);
         code.lea(code.ABI_PARAM3, ptr[rsp + ABI_SHADOW_SPACE]);
         code.movaps(xword[code.ABI_PARAM3], xmm1);
         code.CallLambda(
@@ -1170,7 +1181,7 @@ void A64EmitX64::EmitExclusiveWriteMemory(A64EmitContext& ctx, IR::Inst* inst) {
                     }) ? 0 : 1;
             }
         );
-        code.add(rsp, 16 + ABI_SHADOW_SPACE);
+        ctx.reg_alloc.ReleaseStackSpace(16 + ABI_SHADOW_SPACE);
     }
     code.L(end);
 }
@@ -1225,7 +1236,7 @@ void A64EmitX64::EmitTerminalImpl(IR::Term::LinkBlock terminal, IR::LocationDesc
         return;
     }
 
-    code.cmp(qword[r15 + offsetof(A64JitState, cycles_remaining)], 0);
+    code.cmp(qword[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, cycles_remaining)], 0);
 
     patch_information[terminal.next].jg.emplace_back(code.getCurr());
     if (auto next_bb = GetBasicBlock(terminal.next)) {
@@ -1289,7 +1300,7 @@ void A64EmitX64::EmitTerminalImpl(IR::Term::If terminal, IR::LocationDescriptor 
 
 void A64EmitX64::EmitTerminalImpl(IR::Term::CheckBit terminal, IR::LocationDescriptor initial_location, bool is_single_step) {
     Xbyak::Label fail;
-    code.cmp(code.byte[r15 + offsetof(A64JitState, check_bit)], u8(0));
+    code.cmp(code.byte[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, check_bit)], u8(0));
     code.jz(fail);
     EmitTerminal(terminal.then_, initial_location, is_single_step);
     code.L(fail);

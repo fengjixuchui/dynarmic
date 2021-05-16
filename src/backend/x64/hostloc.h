@@ -111,14 +111,4 @@ const HostLocList any_xmm = {
 Xbyak::Reg64 HostLocToReg64(HostLoc loc);
 Xbyak::Xmm HostLocToXmm(HostLoc loc);
 
-template <typename JitStateType>
-Xbyak::Address SpillToOpArg(HostLoc loc) {
-    ASSERT(HostLocIsSpill(loc));
-
-    size_t i = static_cast<size_t>(loc) - static_cast<size_t>(HostLoc::FirstSpill);
-    ASSERT_MSG(i < JitStateType::SpillCount, "Spill index greater than number of available spill locations");
-
-    return JitStateType::GetSpillLocationFromIndex(i);
-}
-
 } // namespace Dynarmic::Backend::X64

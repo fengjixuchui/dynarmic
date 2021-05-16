@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 
+#include <dynarmic/A32/arch_version.h>
 #include <dynarmic/optimization_flags.h>
 
 namespace Dynarmic {
@@ -47,6 +48,8 @@ enum class Exception {
     PreloadData,
     /// A PLDW instruction was executed. (Hint instruction.)
     PreloadDataWithIntentToWrite,
+    /// A PLI instruction was executed. (Hint instruction.)
+    PreloadInstruction,
 };
 
 /// These function pointers may be inserted into compiled code.
@@ -104,6 +107,10 @@ struct UserConfig {
 
     size_t processor_id = 0;
     ExclusiveMonitor* global_monitor = nullptr;
+
+    /// Select the architecture version to use.
+    /// There are minor behavioural differences between versions.
+    ArchVersion arch_version = ArchVersion::v8;
 
     /// This selects other optimizations than can't otherwise be disabled by setting other
     /// configuration options. This includes:
@@ -190,6 +197,13 @@ struct UserConfig {
     /// NOTE: Calling Jit::SetCpsr with CPSR.E=1 while this option is enabled may result
     ///       in unusual behavior.
     bool always_little_endian = false;
+
+    // Minimum size is about 8MiB. Maximum size is about 2GiB. Maximum size is limited by
+    // the maximum length of a x64 jump.
+    size_t code_cache_size = 256 * 1024 * 1024; // bytes
+    // Determines the relative size of the near and far code caches. Must be smaller than
+    // code_cache_size.
+    size_t far_code_offset = 200 * 1024 * 1024; // bytes
 };
 
 } // namespace A32

@@ -5,7 +5,7 @@
 
 #include "common/assert.h"
 #include "frontend/A64/ir_emitter.h"
-#include "frontend/ir/opcodes.h"
+#include "ir/opcodes.h"
 
 namespace Dynarmic::A64 {
 
@@ -54,6 +54,10 @@ void IREmitter::ExceptionRaised(Exception exception) {
 
 void IREmitter::DataCacheOperationRaised(DataCacheOperation op, const IR::U64& value) {
     Inst(Opcode::A64DataCacheOperationRaised, Imm64(static_cast<u64>(op)), value);
+}
+
+void IREmitter::InstructionCacheOperationRaised(InstructionCacheOperation op, const IR::U64& value) {
+    Inst(Opcode::A64InstructionCacheOperationRaised, Imm64(static_cast<u64>(op)), value);
 }
 
 void IREmitter::DataSynchronizationBarrier() {
