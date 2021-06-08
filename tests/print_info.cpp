@@ -12,27 +12,26 @@
 #include <optional>
 #include <string>
 
-#include <dynarmic/A32/a32.h>
-#include <dynarmic/A32/disassembler.h>
-
-#include "common/bit_util.h"
-#include "common/common_types.h"
-#include "common/llvm_disassemble.h"
-#include "frontend/A32/decoder/arm.h"
-#include "frontend/A32/decoder/asimd.h"
-#include "frontend/A32/decoder/vfp.h"
-#include "frontend/A32/location_descriptor.h"
-#include "frontend/A32/translate/impl/translate.h"
-#include "frontend/A32/translate/translate.h"
-#include "frontend/A64/decoder/a64.h"
-#include "frontend/A64/location_descriptor.h"
-#include "frontend/A64/translate/impl/impl.h"
-#include "frontend/A64/translate/translate.h"
-#include "ir/basic_block.h"
-#include "ir/opt/passes.h"
-
 #include <fmt/format.h>
 #include <fmt/ostream.h>
+
+#include "dynarmic/common/bit_util.h"
+#include "dynarmic/common/common_types.h"
+#include "dynarmic/common/llvm_disassemble.h"
+#include "dynarmic/frontend/A32/decoder/arm.h"
+#include "dynarmic/frontend/A32/decoder/asimd.h"
+#include "dynarmic/frontend/A32/decoder/vfp.h"
+#include "dynarmic/frontend/A32/location_descriptor.h"
+#include "dynarmic/frontend/A32/translate/impl/translate.h"
+#include "dynarmic/frontend/A32/translate/translate.h"
+#include "dynarmic/frontend/A64/decoder/a64.h"
+#include "dynarmic/frontend/A64/location_descriptor.h"
+#include "dynarmic/frontend/A64/translate/impl/impl.h"
+#include "dynarmic/frontend/A64/translate/translate.h"
+#include "dynarmic/interface/A32/a32.h"
+#include "dynarmic/interface/A32/disassembler.h"
+#include "dynarmic/ir/basic_block.h"
+#include "dynarmic/ir/opt/passes.h"
 
 using namespace Dynarmic;
 
@@ -98,7 +97,8 @@ void PrintA64Instruction(u32 instruction) {
 
 void PrintThumbInstruction(u32 instruction) {
     const size_t inst_size = (instruction >> 16) == 0 ? 2 : 4;
-    if (inst_size == 4) instruction = Common::SwapHalves32(instruction);
+    if (inst_size == 4)
+        instruction = Common::SwapHalves32(instruction);
 
     fmt::print("{:08x} {}\n", instruction, Common::DisassembleAArch32(true, 0, (u8*)&instruction, inst_size));
 
@@ -188,7 +188,7 @@ void ExecuteA32Instruction(u32 instruction) {
     u32 cpsr = 0;
     u32 fpscr = 0;
 
-    const std::map<std::string, u32*> name_map = [&regs, &ext_regs, &cpsr, &fpscr]{
+    const std::map<std::string, u32*> name_map = [&regs, &ext_regs, &cpsr, &fpscr] {
         std::map<std::string, u32*> name_map;
         for (size_t i = 0; i < regs.size(); i++) {
             name_map[fmt::format("r{}", i)] = &regs[i];
@@ -204,7 +204,7 @@ void ExecuteA32Instruction(u32 instruction) {
         return name_map;
     }();
 
-    const auto get_line = [](){
+    const auto get_line = []() {
         std::string line;
         std::getline(std::cin, line);
         std::transform(line.begin(), line.end(), line.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -213,12 +213,15 @@ void ExecuteA32Instruction(u32 instruction) {
 
     const auto get_value = [&get_line]() -> std::optional<u32> {
         std::string line = get_line();
-        if (line.length() > 2 && line[0] == '0' && line[1] == 'x') line = line.substr(2);
-        if (line.length() > 8) return std::nullopt;
+        if (line.length() > 2 && line[0] == '0' && line[1] == 'x')
+            line = line.substr(2);
+        if (line.length() > 8)
+            return std::nullopt;
 
         char* endptr;
         const u32 value = strtol(line.c_str(), &endptr, 16);
-        if (line.c_str() + line.length() != endptr) return std::nullopt;
+        if (line.c_str() + line.length() != endptr)
+            return std::nullopt;
 
         return value;
     };
@@ -254,7 +257,7 @@ void ExecuteA32Instruction(u32 instruction) {
 
     const u32 initial_pc = regs[15];
     env.MemoryWrite32(initial_pc + 0, instruction);
-    env.MemoryWrite32(initial_pc + 4, 0xEAFFFFFE); // B +0
+    env.MemoryWrite32(initial_pc + 4, 0xEAFFFFFE);  // B +0
 
     cpu.Run();
 
@@ -287,7 +290,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const char* const hex_instruction = [argv]{
+    const char* const hex_instruction = [argv] {
         if (strlen(argv[2]) > 2 && argv[2][0] == '0' && argv[2][1] == 'x') {
             return argv[2] + 2;
         }

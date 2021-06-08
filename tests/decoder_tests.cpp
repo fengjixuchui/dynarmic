@@ -4,20 +4,20 @@
  */
 
 #include <cstring>
-#include <iostream>
 #include <iomanip>
+#include <iostream>
 
 #include <catch.hpp>
 
-#include <dynarmic/A32/config.h>
-#include "common/assert.h"
-#include "frontend/A32/decoder/asimd.h"
-#include "frontend/A32/translate/impl/translate.h"
-#include "ir/opcodes.h"
+#include "dynarmic/common/assert.h"
+#include "dynarmic/frontend/A32/decoder/asimd.h"
+#include "dynarmic/frontend/A32/translate/impl/translate.h"
+#include "dynarmic/interface/A32/config.h"
+#include "dynarmic/ir/opcodes.h"
 
 using namespace Dynarmic;
 
-TEST_CASE("ASIMD Decoder: Ensure table order correctness", "[decode][a32]") {
+TEST_CASE("ASIMD Decoder: Ensure table order correctness", "[decode][a32][.]") {
     const auto table = A32::GetASIMDDecodeTable<A32::TranslatorVisitor>();
 
     const auto get_ir = [](const A32::ASIMDMatcher<A32::TranslatorVisitor>& matcher, u32 instruction) {
@@ -31,7 +31,7 @@ TEST_CASE("ASIMD Decoder: Ensure table order correctness", "[decode][a32]") {
         return block;
     };
 
-    const auto is_decode_error = [&get_ir](const A32::ASIMDMatcher<A32::TranslatorVisitor>& matcher, u32 instruction){
+    const auto is_decode_error = [&get_ir](const A32::ASIMDMatcher<A32::TranslatorVisitor>& matcher, u32 instruction) {
         const auto block = get_ir(matcher, instruction);
 
         for (const auto& ir_inst : block) {
